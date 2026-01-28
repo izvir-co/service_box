@@ -1365,6 +1365,7 @@ dependencies = [
  "rpc_attr",
  "serde",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
  "uuid",

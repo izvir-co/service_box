@@ -1,7 +1,10 @@
 use axum::body::Body;
 use axum::http::{HeaderName, Request};
-use axum::middleware::Next;
 use axum::response::Response;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tower::{Layer, Service};
 use tower_http::request_id::{
     MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
 };
@@ -16,6 +19,10 @@ pub fn propagate_request_id_layer() -> PropagateRequestIdLayer {
 
 pub fn set_request_id_layer() -> SetRequestIdLayer<MakeRequestTraceId> {
     SetRequestIdLayer::new(TRACE_ID_HEADER, MakeRequestTraceId)
+}
+
+pub fn tracing_layer() -> TracingLayer {
+    TracingLayer
 }
 
 pub async fn shutdown_signal() {
@@ -39,40 +46,77 @@ impl MakeRequestId for MakeRequestTraceId {
     }
 }
 
-pub async fn tracing_middleware(
-    req: Request<Body>,
-    next: Next,
-) -> Response {
-    let start = std::time::Instant::now();
+#[derive(Clone, Copy, Default)]
+pub struct TracingLayer;
 
-    let trace_id = req
-        .extensions()
-        .get::<RequestId>()
-        .and_then(|id| id.header_value().to_str().ok())
-        .unwrap_or("-")
-        .to_owned();
+impl<S> Layer<S> for TracingLayer {
+    type Service = TracingService<S>;
 
-    let span = tracing::info_span!(
-        "request",
-        trace_id = %trace_id,
-        method = %req.method(),
-        uri = %req.uri(),
-        status = tracing::field::Empty,
-        duration_ms = tracing::field::Empty,
-        error_trace = tracing::field::Empty,
-    );
+    fn layer(
+        &self,
+        inner: S,
+    ) -> Self::Service {
+        TracingService { inner }
+    }
+}
 
-    let mut response = next.run(req).instrument(span.clone()).await;
-    if let Ok(trace_header) = axum::http::HeaderValue::from_str(&trace_id) {
-        response.headers_mut().insert(TRACE_ID_HEADER, trace_header);
+#[derive(Clone)]
+pub struct TracingService<S> {
+    inner: S,
+}
+
+impl<S> Service<Request<Body>> for TracingService<S>
+where
+    S: Service<Request<Body>, Response = Response> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+    S::Error: Send + 'static,
+{
+    type Response = Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
     }
 
-    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let status = response.status().as_u16();
-    span.record("status", tracing::field::display(status));
-    span.record("duration_ms", duration_ms);
+    fn call(
+        &mut self,
+        req: Request<Body>,
+    ) -> Self::Future {
+        let mut inner = self.inner.clone();
+        let start = std::time::Instant::now();
 
-    tracing::info!(parent: &span, "request_completed");
+        let trace_id = req
+            .extensions()
+            .get::<RequestId>()
+            .and_then(|id| id.header_value().to_str().ok())
+            .unwrap_or("-")
+            .to_owned();
 
-    response
+        let span = tracing::info_span!(
+            "request",
+            trace_id = %trace_id,
+            method = %req.method(),
+            uri = %req.uri(),
+            status = tracing::field::Empty,
+            duration_ms = tracing::field::Empty,
+            error_trace = tracing::field::Empty,
+        );
+
+        Box::pin(async move {
+            let response = inner.call(req).instrument(span.clone()).await?;
+
+            let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let status = response.status().as_u16();
+            span.record("status", tracing::field::display(status));
+            span.record("duration_ms", duration_ms);
+
+            tracing::info!(parent: &span, "request_completed");
+
+            Ok(response)
+        })
+    }
 }
