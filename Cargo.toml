@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = [
+  "crate/arktype_ast",
+  "crate/arktype_ast_macros",
+  "crate/arktype_ast_test",
+  "crate/cfg",
+  "crate/errx",
+  "crate/pg",
+  "crate/rpc",
+  "crate/rpc_attr",
+  "crate/rpc_test",
+  "crate/sf",
+  "crate/tracing_provider",
+]
+
+[workspace.package]
+version = "0.0.0"
+
+[workspace.dependencies]
+arktype_ast = { path = "crate/arktype_ast" }
+arktype_ast_macros = { path = "crate/arktype_ast_macros" }
+cfg = { path = "crate/cfg" }
+errx = { path = "crate/errx" }
+pg = { path = "crate/pg" }
+rpc = { path = "crate/rpc" }
+rpc_attr = { path = "crate/rpc_attr" }
+sf = { path = "crate/sf" }
+tracing_provider = { path = "crate/tracing_provider" }

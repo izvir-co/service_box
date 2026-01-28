@@ -1,0 +1,9 @@
+[package]
+name = "arktype_ast_test"
+edition = "2024"
+version = "0.0.0"
+publish = false
+
+[dependencies]
+arktype_ast = { path = "../arktype_ast" }
+serde = { version = "1.0", features = ["derive"] }

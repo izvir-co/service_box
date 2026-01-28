@@ -1,0 +1,9 @@
+[package]
+name = "cfg"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+serde = "1.0.228"
+thiserror = "2.0.18"
+toml = "0.9.11"

@@ -1,0 +1,15 @@
+[package]
+name = "tracing_provider"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+cfg = { workspace = true }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+serde = { version = "1.0.228", features = ["derive"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+tokio = { version = "1.49.0", features = ["sync", "rt", "time", "macros"] }
+serde_json = "1.0.149"
+chrono = { version = "0.4", features = ["serde"] }

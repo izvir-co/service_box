@@ -1,0 +1,7 @@
+[package]
+name = "arktype_ast"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+arktype_ast_macros = { workspace = true }

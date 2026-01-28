@@ -1,0 +1,11 @@
+[package]
+name = "pg"
+edition = "2024"
+version.workspace = true
+
+[dependencies]
+cfg = { workspace = true }
+
+# extern
+deadpool-postgres = "0.14.1"
+serde = { version = "1.0.228", features = ["derive"] }

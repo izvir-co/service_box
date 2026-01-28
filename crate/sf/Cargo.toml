@@ -1,0 +1,17 @@
+[package]
+name = "sf"
+edition = "2024"
+version.workspace = true
+
+[features]
+pg = ["dep:pg", "dep:tokio-postgres"]
+
+[dependencies]
+# TODO Make this optional
+arktype_ast = { workspace = true }
+pg = { workspace = true, optional = true}
+
+serde = { version = "1.0.228", features = ["derive"] }
+sonyflake = { version = "0.4.0", features = ["pnet"] }
+thiserror = "2.0.18"
+tokio-postgres = { version = "0.7.16", optional = true }
