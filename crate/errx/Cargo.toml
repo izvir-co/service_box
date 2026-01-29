@@ -4,6 +4,7 @@ edition = "2024"
 version.workspace = true
 
 [features]
+no_unsafe_opt = []
 pg = ["dep:pg", "dep:tokio-postgres"]
 sf = ["dep:sf"]
 

@@ -2,8 +2,8 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::{
-    AngleBracketedGenericArguments, GenericArgument, ItemFn, Path, PathArguments, ReturnType, Type,
-    TypePath, parse_macro_input,
+    parse_macro_input, AngleBracketedGenericArguments, GenericArgument, ItemFn, Path,
+    PathArguments, ReturnType, Type, TypePath,
 };
 
 #[proc_macro_attribute]
@@ -11,7 +11,7 @@ pub fn handler(
     attr: TokenStream,
     item: TokenStream,
 ) -> TokenStream {
-    // Parse attribute like #[rpc(v0)]
+    // Parse attribute like #[handler(v0)]
     let version: Path = parse_macro_input!(attr as Path);
 
     // Only support free functions for now
@@ -20,7 +20,7 @@ pub fn handler(
         Err(_) => {
             return syn::Error::new(
                 Span::call_site(),
-                "#[rpc(...)] can only be applied to free functions",
+                "#[handler(...)] can only be applied to free functions",
             )
             .to_compile_error()
             .into();

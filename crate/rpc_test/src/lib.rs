@@ -226,7 +226,8 @@ mod tests {
                 env::set_var("RPC_BINDGEN_SERVICE_NAME", "golden_standard");
             }
 
-            rpc::generate_bindings();
+            let result = rpc::generate_bindings();
+            assert!(result.is_ok(), "Bindgen finished with error: {:?}", result);
 
             let generated_path = export_dir.join("golden_standard_rpc.gen.ts");
             fs::read_to_string(&generated_path).unwrap_or_else(|err| {
