@@ -197,14 +197,26 @@ where
         match self {
             Ok(val) => Ok(val),
             Err(err) => {
-                if std::any::TypeId::of::<E>() == std::any::TypeId::of::<Error>() {
-                    // SAFETY: TypeId guard ensures E == Error, so reading as Error is valid.
-                    let mut err = std::mem::ManuallyDrop::new(err);
-                    let err_ptr = &mut *err as *mut E as *mut Error;
-                    let err = unsafe { err_ptr.read() };
-                    Err(err.trace_stack())
-                } else {
-                    Err(Error::new_traced(err))
+                #[cfg(feature = "no_unsafe_opt")]
+                {
+                    if let Some(err) = (&err as &dyn std::any::Any).downcast_ref::<Error>() {
+                        Err(err.clone().trace_stack())
+                    } else {
+                        Err(Error::new_traced(err))
+                    }
+                }
+                #[cfg(not(feature = "no_unsafe_opt"))]
+                {
+                    if std::any::TypeId::of::<E>() == std::any::TypeId::of::<Error>() {
+                        // SAFETY: The TypeId guard ensures E is exactly Error.
+                        // ManuallyDrop prevents double-drop of the original E.
+                        // ptr::read moves the Error without cloning.
+                        let err = std::mem::ManuallyDrop::new(err);
+                        let err = unsafe { std::ptr::read(&*err as *const E as *const Error) };
+                        Err(err.trace_stack())
+                    } else {
+                        Err(Error::new_traced(err))
+                    }
                 }
             },
         }

@@ -65,6 +65,7 @@ fn default_log_directory() -> String {
 }
 
 const MAX_LOG_SIZE_BYTES: u64 = 100 * 1024 * 1024; // 100 MB
+const AXIOM_EVENT_CHANNEL_CAPACITY: usize = 10_000;
 
 /// A writer that rotates log files when they exceed MAX_LOG_SIZE_BYTES.
 /// When rotation occurs, the current file is renamed with a timestamp suffix.
@@ -279,7 +280,7 @@ where
 }
 
 struct AxiomLayer {
-    tx: mpsc::UnboundedSender<LogEvent>,
+    tx: mpsc::Sender<LogEvent>,
     service_name: String,
 }
 
@@ -288,7 +289,7 @@ impl AxiomLayer {
         service_name: String,
         config: AxiomConfig,
     ) -> Self {
-        let (event_tx, event_rx) = mpsc::unbounded_channel::<LogEvent>();
+        let (event_tx, event_rx) = mpsc::channel::<LogEvent>(AXIOM_EVENT_CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>(1);
         let (complete_tx, complete_rx) = oneshot::channel::<()>();
 
@@ -558,12 +559,12 @@ where
             fields,
         };
 
-        let _ = self.tx.send(log_event);
+        let _ = self.tx.try_send(log_event);
     }
 }
 
 async fn background_sender(
-    mut event_rx: mpsc::UnboundedReceiver<LogEvent>,
+    mut event_rx: mpsc::Receiver<LogEvent>,
     mut shutdown_rx: mpsc::Receiver<()>,
     complete_tx: oneshot::Sender<()>,
     axiom_url: String,

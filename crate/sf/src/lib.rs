@@ -162,8 +162,13 @@ impl tokio_postgres::types::ToSql for Snowflake {
         Self: Sized,
     {
         if *ty == tokio_postgres::types::Type::INT8 {
-            // TODO This will overflow in about 200 years, fix this sometime before that
-            let value = self.0 as i64;
+            let value: i64 = match i64::try_from(self.0) {
+                Ok(value) => value,
+                Err(_) => {
+                    let msg = format!("Snowflake value {} exceeds BIGINT range", self.0);
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, msg).into());
+                },
+            };
             <i64 as tokio_postgres::types::ToSql>::to_sql(&value, ty, out)
         } else {
             Err(format!("Type {} not supported for Snowflake", ty).into())
