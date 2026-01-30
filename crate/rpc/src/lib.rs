@@ -115,22 +115,13 @@ pub fn router() -> axum::Router {
 /// Important: This function needs to be called in the crate that has rpc functions,
 /// If you are using main.rs and lib.rs, it needs to be called somewhere in the lib.rs path
 /// If you call this directly from main.rs, you will get no bindings
-pub fn generate_bindings() -> Result<(), BindgenError> {
+pub fn generate_bindings(
+    out_dir: impl AsRef<std::path::Path>,
+    service_name: impl AsRef<str>,
+) -> Result<(), BindgenError> {
     let global_start = Instant::now();
-    let out_dir = match std::env::var("RPC_BINDGEN_EXPORT_DIR") {
-        Ok(d) => std::path::PathBuf::from(d),
-        Err(_) => {
-            eprintln!("env RPC_BINDGEN_EXPORT_DIR not set; skipping generation");
-            return Ok(());
-        },
-    };
-    let service_name = match std::env::var("RPC_BINDGEN_SERVICE_NAME") {
-        Ok(d) => d,
-        Err(_) => {
-            eprintln!("env RPC_BINDGEN_SERVICE_NAME not set; skipping generation");
-            return Ok(());
-        },
-    };
+    let out_dir = out_dir.as_ref().to_path_buf();
+    let service_name = service_name.as_ref().to_owned();
     for b in inventory::iter::<Binding> {
         tracing::info!("bindgen running...");
         let gen_start = Instant::now();
@@ -608,14 +599,6 @@ pub fn rpc_bindgen(
     props_type_bindgen: BTreeMap<String, Schema>,
     target_type_bindgen: BTreeMap<String, Schema>,
 ) {
-    let _service_name = match std::env::var("RPC_BINDGEN_SERVICE_NAME") {
-        Ok(d) => d,
-        Err(_) => {
-            eprintln!("env RPC_BINDGEN_SERVICE_NAME not set; skipping generation");
-            return;
-        },
-    };
-
     let props = upper_camel_case(&props.replace("::", "$"));
     let target = upper_camel_case(&target.replace("::", "$"));
 
