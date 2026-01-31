@@ -22,6 +22,7 @@ pub struct Endpoint {
 inventory::collect!(Endpoint);
 
 pub struct Binding {
+    pub crate_id: &'static str,
     pub generator: fn(&mut RpcCalls),
 }
 
@@ -111,38 +112,39 @@ pub fn router() -> axum::Router {
     r
 }
 
-/// Important: This function needs to be called in the crate that has rpc functions,
-/// If you are using main.rs and lib.rs, it needs to be called somewhere in the lib.rs path
-/// If you call this directly from main.rs, you will get no bindings
+/// Important: This function needs to be called in a crate that links all rpc crates,
+/// because it generates one bindings file per registered crate.
 pub fn generate_bindings(
     out_dir: impl AsRef<std::path::Path>,
-    service_name: impl AsRef<str>,
 ) -> Result<(), BindgenError> {
     let global_start = Instant::now();
     let out_dir = out_dir.as_ref().to_path_buf();
-    let service_name = service_name.as_ref().to_owned();
-    let mut instance = RpcCalls {
-        imports: BTreeMap::new(),
-        calls: BTreeMap::new(),
-    };
+    let mut instances: BTreeMap<String, RpcCalls> = BTreeMap::new();
     for b in inventory::iter::<Binding> {
-        tracing::info!("bindgen running...");
+        let crate_id = b.crate_id;
+        tracing::info!("bindgen running for {crate_id}...");
         let gen_start = Instant::now();
-        (b.generator)(&mut instance);
+        let instance = instances.entry(crate_id.to_string()).or_insert(RpcCalls {
+            imports: BTreeMap::new(),
+            calls: BTreeMap::new(),
+        });
+        (b.generator)(instance);
         let gen_end = Instant::now() - gen_start;
         tracing::info!("Done in {gen_end:?}");
     }
-
-    let out_rpc_file_name = format!("{service_name}_rpc.gen.ts");
-
-    instance.try_override_existing(&out_dir, &out_rpc_file_name, &service_name)?;
 
     let abs_out_dir = out_dir
         .canonicalize()
         .or_else(|_| std::env::current_dir().map(|cwd| cwd.join(&out_dir)))
         .unwrap_or_else(|_| out_dir.clone());
-    let out_file_path = abs_out_dir.join(&out_rpc_file_name);
-    tracing::info!("rpc bindgen output: {}", out_file_path.display());
+
+    for (crate_id, mut instance) in instances {
+        let out_rpc_file_name = format!("{crate_id}_rpc.gen.ts");
+        instance.try_override_existing(&out_dir, &out_rpc_file_name, &crate_id)?;
+
+        let out_file_path = abs_out_dir.join(&out_rpc_file_name);
+        tracing::info!("rpc bindgen output: {}", out_file_path.display());
+    }
 
     let global_end = Instant::now() - global_start;
     tracing::info!("Finished bindgen in {global_end:?}");
@@ -183,6 +185,7 @@ macro_rules! impl_rpc {
 
             $crate::submit! {
                 $crate::Binding {
+                    crate_id: env!("CARGO_PKG_NAME"),
                     generator: $target,
                 }
             }
