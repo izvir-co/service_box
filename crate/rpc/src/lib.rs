@@ -14,6 +14,113 @@ pub use rpc_attr::handler;
 
 pub mod server;
 
+#[cfg(feature = "service")]
+use axum::http::request::Parts;
+#[cfg(feature = "service")]
+use std::future::Future;
+
+#[cfg(feature = "service")]
+#[allow(async_fn_in_trait)]
+pub trait Context: Sized + Send + 'static {
+    async fn from_request_parts(
+        parts: &mut Parts,
+    ) -> Result<Self, errx::Error>;
+}
+
+#[cfg(feature = "service")]
+impl Context for () {
+    async fn from_request_parts(
+        _parts: &mut Parts,
+    ) -> Result<Self, errx::Error> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "service")]
+#[doc(hidden)]
+pub trait RpcHandler<Args> {
+    type Props;
+    type Out;
+    type Ctx: Context;
+    type Fut: Future<Output = Result<Self::Out, errx::Error>> + Send;
+
+    fn call(
+        self,
+        ctx: Self::Ctx,
+        props: Self::Props,
+    ) -> Self::Fut;
+}
+
+#[cfg(feature = "service")]
+impl<F, Fut, Props, Out> RpcHandler<(Props,)> for F
+where
+    F: FnOnce(Props) -> Fut,
+    Fut: Future<Output = Result<Out, errx::Error>> + Send,
+{
+    type Props = Props;
+    type Out = Out;
+    type Ctx = ();
+    type Fut = Fut;
+
+    fn call(
+        self,
+        _ctx: Self::Ctx,
+        props: Self::Props,
+    ) -> Self::Fut {
+        (self)(props)
+    }
+}
+
+#[cfg(feature = "service")]
+impl<F, Fut, Props, Out, Ctx> RpcHandler<(Ctx, Props)> for F
+where
+    F: FnOnce(Ctx, Props) -> Fut,
+    Ctx: Context,
+    Fut: Future<Output = Result<Out, errx::Error>> + Send,
+{
+    type Props = Props;
+    type Out = Out;
+    type Ctx = Ctx;
+    type Fut = Fut;
+
+    fn call(
+        self,
+        ctx: Self::Ctx,
+        props: Self::Props,
+    ) -> Self::Fut {
+        (self)(ctx, props)
+    }
+}
+
+#[cfg(feature = "service")]
+#[doc(hidden)]
+pub async fn context_from_parts<F, Args>(
+    _handler: F,
+    parts: &mut Parts,
+) -> Result<<F as RpcHandler<Args>>::Ctx, errx::Error>
+where
+    F: RpcHandler<Args>,
+{
+    use errx::ErrorCapture as _;
+
+    <F as RpcHandler<Args>>::Ctx::from_request_parts(parts)
+        .await
+        .trace_err()
+}
+
+#[cfg(feature = "service")]
+#[doc(hidden)]
+pub async fn call_handler<F, Args>(
+    handler: F,
+    ctx: <F as RpcHandler<Args>>::Ctx,
+    props: <F as RpcHandler<Args>>::Props,
+) -> Result<<F as RpcHandler<Args>>::Out, errx::Error>
+where
+    F: RpcHandler<Args>,
+{
+    handler.call(ctx, props).await
+}
+
 pub struct Endpoint {
     pub path: &'static str,
     pub route: fn() -> axum::routing::MethodRouter,
@@ -70,19 +177,38 @@ macro_rules! register_server_rpc {
         #[cfg(feature = "service")]
         const _: () = {
             use axum::{
+                body::Body,
+                extract::FromRequest,
                 extract::Json,
-                http::StatusCode,
+                http::{Request, StatusCode},
                 response::{IntoResponse, Response},
                 routing::{MethodRouter, post},
             };
             use errx::ErrorCapture as _;
 
             async fn __rpc_handler(
-                Json(payload): Json<<$target as $crate::Rpc>::Props>
-            ) -> Result<Response, errx::Error> {
-                let res: Result<$target, errx::Error> = $exec_fn(payload).await;
-                res.map(|o| (StatusCode::OK, axum::Json(o)).into_response())
-                    .trace_err()
+                req: Request<Body>
+            ) -> Response {
+                let (mut parts, body) = req.into_parts();
+
+                let ctx = match $crate::context_from_parts($exec_fn, &mut parts).await {
+                    Ok(ctx) => ctx,
+                    Err(err) => return err.into_response(),
+                };
+
+                let req = Request::from_parts(parts, body);
+                let payload = match Json::<<$target as $crate::Rpc>::Props>::from_request(req, &()).await {
+                    Ok(Json(payload)) => payload,
+                    Err(rejection) => return rejection.into_response(),
+                };
+
+                let res: Result<$target, errx::Error> =
+                    $crate::call_handler($exec_fn, ctx, payload).await;
+
+                match res.trace_err() {
+                    Ok(output) => (StatusCode::OK, axum::Json(output)).into_response(),
+                    Err(err) => err.into_response(),
+                }
             }
 
             fn __route() -> MethodRouter {
