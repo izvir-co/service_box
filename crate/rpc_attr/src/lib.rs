@@ -34,17 +34,23 @@ pub fn handler(
             .into();
     }
 
-    // Exactly one parameter: props
-    if func.sig.inputs.len() != 1 {
+    // One or two parameters: [ctx,] props
+    if func.sig.inputs.is_empty() || func.sig.inputs.len() > 2 {
         return syn::Error::new_spanned(
             &func.sig.inputs,
-            "rpc handlers must take exactly one parameter: the props type",
+            "rpc handlers must take one or two parameters: [ctx,] props",
         )
         .to_compile_error()
         .into();
     }
 
-    let props_ty: Type = match func.sig.inputs.first().unwrap() {
+    let props_arg = if func.sig.inputs.len() == 1 {
+        func.sig.inputs.first().unwrap()
+    } else {
+        func.sig.inputs.iter().nth(1).unwrap()
+    };
+
+    let props_ty: Type = match props_arg {
         syn::FnArg::Typed(pat_ty) => (*pat_ty.ty).clone(),
         syn::FnArg::Receiver(_) => {
             return syn::Error::new_spanned(

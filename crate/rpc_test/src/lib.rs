@@ -57,6 +57,23 @@ pub struct NestedProps {
     pub admin: bool,
 }
 
+#[cfg(feature = "service")]
+#[derive(Debug, Clone)]
+pub struct AuthCtx {
+    pub user_id: Option<String>,
+}
+
+#[cfg(feature = "service")]
+impl rpc::Context for AuthCtx {
+    async fn from_request_parts(
+        _parts: &mut axum::http::request::Parts,
+    ) -> Result<Self, errx::Error> {
+        Ok(AuthCtx {
+            user_id: Some("test-user".to_string()),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ArkType)]
 pub struct GetUserResponse {
     pub id: String,
@@ -89,7 +106,10 @@ pub struct NestedResponse {
 }
 
 #[cfg(feature = "service")]
-pub async fn get_user(props: GetUserProps) -> Result<GetUserResponse, errx::Error> {
+pub async fn get_user(
+    _ctx: AuthCtx,
+    props: GetUserProps,
+) -> Result<GetUserResponse, errx::Error> {
     let role = props.expected_role.unwrap_or(UserRole::Member);
     let email = if props.include_email.unwrap_or(true) {
         "test@example.com".to_string()
