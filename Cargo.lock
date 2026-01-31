@@ -1364,6 +1364,7 @@ dependencies = [
  "inventory",
  "rpc_attr",
  "serde",
+ "thiserror 2.0.18",
  "tokio",
  "tower",
  "tower-http",
