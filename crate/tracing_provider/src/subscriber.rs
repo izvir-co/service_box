@@ -61,7 +61,7 @@ fn default_true() -> bool {
 }
 
 fn default_log_directory() -> String {
-    "./logs".to_string()
+    "./.log".to_string()
 }
 
 const MAX_LOG_SIZE_BYTES: u64 = 100 * 1024 * 1024; // 100 MB
