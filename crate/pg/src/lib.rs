@@ -1,27 +1,36 @@
-use std::{path::Path, sync::OnceLock};
+use std::sync::OnceLock;
 
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, tokio_postgres};
 use serde::Deserialize;
+use thiserror::Error;
 
-#[derive(Deserialize)]
-struct Config {
-    url: String,
-    max_connections: usize,
+static POOL: OnceLock<Pool> = OnceLock::new();
+
+#[derive(Clone, Deserialize)]
+pub struct Config {
+    pub url: String,
+    pub max_connections: usize,
 }
 
-impl Config {
-    fn load() -> Config {
-        let path = Path::new(".config/pg.toml");
-        cfg::load_or_panic(path)
-    }
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("pg pool not initialized; call pg::init_pool(...) first")]
+    NotInitialized,
+    #[error("pg pool already initialized")]
+    AlreadyInitialized,
+    #[error("failed to parse url into tokio_postgres config: {0}")]
+    InvalidUrl(String),
+    #[error("failed to build connection pool for tokio_postgres: {0}")]
+    BuildPool(String),
+    #[error(transparent)]
+    Pool(#[from] deadpool_postgres::PoolError),
 }
 
-fn build_pool() -> Pool {
-    let file_config = Config::load();
-    let pg_config: tokio_postgres::Config = file_config
+fn build_pool(config: &Config) -> Result<Pool, Error> {
+    let pg_config: tokio_postgres::Config = config
         .url
-        .parse()
-        .unwrap_or_else(|err| panic!("Failed to parse url into tokio_postgres config: {err}"));
+        .parse::<tokio_postgres::Config>()
+        .map_err(|err| Error::InvalidUrl(err.to_string()))?;
     let pool_manager_config = ManagerConfig {
         recycling_method: RecyclingMethod::Fast,
     };
@@ -29,22 +38,26 @@ fn build_pool() -> Pool {
     let manager = Manager::from_config(pg_config, tokio_postgres::NoTls, pool_manager_config);
 
     Pool::builder(manager)
-        .max_size(file_config.max_connections)
+        .max_size(config.max_connections)
         .build()
-        .unwrap_or_else(|err| panic!("Failed to build connection pool for tokio_postgres: {err}"))
+        .map_err(|err| Error::BuildPool(err.to_string()))
 }
-
-pub type Error = deadpool_postgres::PoolError;
 pub type Client = deadpool_postgres::Object;
 pub type Transaction<'a> = deadpool_postgres::Transaction<'a>;
 
-pub fn pool() -> Pool {
-    static POOL: OnceLock<Pool> = OnceLock::new();
-    POOL.get_or_init(build_pool).clone()
+/// Initialize the global connection pool.
+pub fn init_pool(config: Config) -> Result<(), Error> {
+    let pool = build_pool(&config)?;
+    POOL.set(pool).map_err(|_| Error::AlreadyInitialized)
+}
+
+pub fn pool() -> Result<Pool, Error> {
+    POOL.get().cloned().ok_or(Error::NotInitialized)
 }
 
 pub async fn client() -> Result<Client, Error> {
-    pool().get().await
+    let pool = pool()?;
+    pool.get().await.map_err(Error::from)
 }
 
 /// This will always be just compiled away
