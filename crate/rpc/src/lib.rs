@@ -2,7 +2,6 @@ use std::time::Instant;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::PathBuf,
-    sync::{Mutex, OnceLock},
 };
 
 use serde::{Serialize, de::DeserializeOwned};
@@ -23,7 +22,7 @@ pub struct Endpoint {
 inventory::collect!(Endpoint);
 
 pub struct Binding {
-    pub generator: fn(),
+    pub generator: fn(&mut RpcCalls),
 }
 
 inventory::collect!(Binding);
@@ -122,15 +121,17 @@ pub fn generate_bindings(
     let global_start = Instant::now();
     let out_dir = out_dir.as_ref().to_path_buf();
     let service_name = service_name.as_ref().to_owned();
+    let mut instance = RpcCalls {
+        imports: BTreeMap::new(),
+        calls: BTreeMap::new(),
+    };
     for b in inventory::iter::<Binding> {
         tracing::info!("bindgen running...");
         let gen_start = Instant::now();
-        (b.generator)();
+        (b.generator)(&mut instance);
         let gen_end = Instant::now() - gen_start;
         tracing::info!("Done in {gen_end:?}");
     }
-
-    let mut instance = RpcCalls::instance().lock().unwrap();
 
     let out_rpc_file_name = format!("{service_name}_rpc.gen.ts");
 
@@ -166,10 +167,11 @@ macro_rules! impl_rpc {
         #[cfg(feature = "bindings")]
         const _: () = {
             #[allow(non_snake_case)]
-            fn $target() {
+            fn $target(instance: &mut $crate::RpcCalls) {
                 let props_type_bindgen = <$props>::arktype_bindings();
                 let target_type_bindgen = <$target>::arktype_bindings();
                 $crate::rpc_bindgen(
+                    instance,
                     stringify!($exec_fn),
                     stringify!($group),
                     ::std::any::type_name::<$props>(),
@@ -423,16 +425,6 @@ fn compute_short_names(names: &BTreeSet<String>) -> Result<HashMap<String, Strin
 }
 
 impl RpcCalls {
-    pub fn instance() -> &'static Mutex<RpcCalls> {
-        static LOCK: OnceLock<Mutex<RpcCalls>> = OnceLock::new();
-        LOCK.get_or_init(|| {
-            Mutex::new(RpcCalls {
-                imports: BTreeMap::new(),
-                calls: BTreeMap::new(),
-            })
-        })
-    }
-
     pub fn override_existing(
         &mut self,
         out_dir: &PathBuf,
@@ -599,6 +591,7 @@ fn upper_camel_case(s: &str) -> String {
 }
 
 pub fn rpc_bindgen(
+    instance: &mut RpcCalls,
     function_name: &str,
     group: &str,
     props: &str,
@@ -608,8 +601,6 @@ pub fn rpc_bindgen(
 ) {
     let props = upper_camel_case(&props.replace("::", "$"));
     let target = upper_camel_case(&target.replace("::", "$"));
-
-    let mut instance = RpcCalls::instance().lock().unwrap();
 
     for prop_type in props_type_bindgen {
         instance.imports.entry(prop_type.0).or_insert(prop_type.1);
