@@ -136,6 +136,13 @@ pub fn generate_bindings(
 
     instance.try_override_existing(&out_dir, &out_rpc_file_name, &service_name)?;
 
+    let abs_out_dir = out_dir
+        .canonicalize()
+        .or_else(|_| std::env::current_dir().map(|cwd| cwd.join(&out_dir)))
+        .unwrap_or_else(|_| out_dir.clone());
+    let out_file_path = abs_out_dir.join(&out_rpc_file_name);
+    tracing::info!("rpc bindgen output: {}", out_file_path.display());
+
     let global_end = Instant::now() - global_start;
     tracing::info!("Finished bindgen in {global_end:?}");
 

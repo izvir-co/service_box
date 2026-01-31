@@ -237,7 +237,7 @@ mod tests {
                 axiom: None,
                 file_logging: Some(FileLoggingConfig {
                     enabled: false,
-                    directory: "logs".to_string(),
+                    directory: ".log".to_string(),
                 }),
             };
             tracing_provider::subscriber::init_with_config(config);
