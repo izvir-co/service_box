@@ -221,10 +221,11 @@ mod tests {
                 let _ = fs::remove_dir_all(&export_dir);
             }
 
-            let result = rpc::generate_bindings(&export_dir, "golden_standard");
+            let result = rpc::generate_bindings(&export_dir, rpc::BindgenFilter::All);
             assert!(result.is_ok(), "Bindgen finished with error: {:?}", result);
 
-            let generated_path = export_dir.join("golden_standard_rpc.gen.ts");
+            let out_file_name = format!("{}_rpc.gen.ts", env!("CARGO_PKG_NAME"));
+            let generated_path = export_dir.join(out_file_name);
             fs::read_to_string(&generated_path).unwrap_or_else(|err| {
                 panic!(
                     "Failed to read generated bindings at {}: {}",
@@ -275,9 +276,10 @@ mod tests {
         #[test]
         fn bindings_match_golden_standard() {
             let generated = generate_bindings_output();
+            let golden_file = format!("{}_rpc.gen.ts", env!("CARGO_PKG_NAME"));
             let golden_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("bindings")
-                .join("golden_standard_rpc.gen.ts");
+                .join(golden_file);
 
             if env::var("RPC_BINDGEN_UPDATE_GOLDEN").is_ok() {
                 if let Some(parent) = golden_path.parent() {

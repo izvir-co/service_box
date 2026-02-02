@@ -5,6 +5,7 @@ use std::{
 };
 
 use serde::{Serialize, de::DeserializeOwned};
+use thiserror::Error;
 
 use arktype_ast::Schema;
 
@@ -22,44 +23,38 @@ pub struct Endpoint {
 inventory::collect!(Endpoint);
 
 pub struct Binding {
+    pub crate_id: &'static str,
     pub generator: fn(&mut RpcCalls),
 }
 
 inventory::collect!(Binding);
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum BindgenError {
+    #[error("schema ordering failed: {0}")]
     SchemaOrder(String),
+    #[error("short name computation failed: {0}")]
     ShortName(String),
+    #[error("{action} failed for {path}: {source}")]
     Io {
         action: &'static str,
         path: PathBuf,
+        #[source]
         source: std::io::Error,
     },
 }
 
-impl std::fmt::Display for BindgenError {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        match self {
-            BindgenError::SchemaOrder(msg) => write!(f, "schema ordering failed: {msg}"),
-            BindgenError::ShortName(msg) => write!(f, "short name computation failed: {msg}"),
-            BindgenError::Io {
-                action,
-                path,
-                source,
-            } => write!(f, "{action} failed for {}: {source}", path.display()),
-        }
-    }
+#[derive(Debug, Clone)]
+pub enum BindgenFilter<'a> {
+    All,
+    Match(Vec<&'a str>),
 }
 
-impl std::error::Error for BindgenError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl<'a> BindgenFilter<'a> {
+    fn matches(&self, crate_id: &str) -> bool {
         match self {
-            BindgenError::Io { source, .. } => Some(source),
-            _ => None,
+            BindgenFilter::All => true,
+            BindgenFilter::Match(ids) => ids.iter().any(|id| *id == crate_id),
         }
     }
 }
@@ -111,38 +106,44 @@ pub fn router() -> axum::Router {
     r
 }
 
-/// Important: This function needs to be called in the crate that has rpc functions,
-/// If you are using main.rs and lib.rs, it needs to be called somewhere in the lib.rs path
-/// If you call this directly from main.rs, you will get no bindings
-pub fn generate_bindings(
+/// Important: This function needs to be called in a crate that links all rpc crates,
+/// because it generates one bindings file per registered crate. When a filter
+/// is provided, only matching crate ids are generated.
+pub fn generate_bindings<'a>(
     out_dir: impl AsRef<std::path::Path>,
-    service_name: impl AsRef<str>,
+    filter: BindgenFilter<'a>,
 ) -> Result<(), BindgenError> {
     let global_start = Instant::now();
     let out_dir = out_dir.as_ref().to_path_buf();
-    let service_name = service_name.as_ref().to_owned();
-    let mut instance = RpcCalls {
-        imports: BTreeMap::new(),
-        calls: BTreeMap::new(),
-    };
+    let mut instances: BTreeMap<String, RpcCalls> = BTreeMap::new();
     for b in inventory::iter::<Binding> {
-        tracing::info!("bindgen running...");
+        let crate_id = b.crate_id;
+        if !filter.matches(crate_id) {
+            continue;
+        }
+        tracing::info!("bindgen running for {crate_id}...");
         let gen_start = Instant::now();
-        (b.generator)(&mut instance);
+        let instance = instances.entry(crate_id.to_string()).or_insert(RpcCalls {
+            imports: BTreeMap::new(),
+            calls: BTreeMap::new(),
+        });
+        (b.generator)(instance);
         let gen_end = Instant::now() - gen_start;
         tracing::info!("Done in {gen_end:?}");
     }
-
-    let out_rpc_file_name = format!("{service_name}_rpc.gen.ts");
-
-    instance.try_override_existing(&out_dir, &out_rpc_file_name, &service_name)?;
 
     let abs_out_dir = out_dir
         .canonicalize()
         .or_else(|_| std::env::current_dir().map(|cwd| cwd.join(&out_dir)))
         .unwrap_or_else(|_| out_dir.clone());
-    let out_file_path = abs_out_dir.join(&out_rpc_file_name);
-    tracing::info!("rpc bindgen output: {}", out_file_path.display());
+
+    for (crate_id, mut instance) in instances {
+        let out_rpc_file_name = format!("{crate_id}_rpc.gen.ts");
+        instance.try_override_existing(&out_dir, &out_rpc_file_name, &crate_id)?;
+
+        let out_file_path = abs_out_dir.join(&out_rpc_file_name);
+        tracing::info!("rpc bindgen output: {}", out_file_path.display());
+    }
 
     let global_end = Instant::now() - global_start;
     tracing::info!("Finished bindgen in {global_end:?}");
@@ -183,6 +184,7 @@ macro_rules! impl_rpc {
 
             $crate::submit! {
                 $crate::Binding {
+                    crate_id: env!("CARGO_PKG_NAME"),
                     generator: $target,
                 }
             }
