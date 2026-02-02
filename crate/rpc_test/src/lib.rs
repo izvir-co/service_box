@@ -57,7 +57,7 @@ pub struct NestedProps {
     pub admin: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ArkType)]
+#[derive(Debug, Clone, Serialize, Deserialize, ArkType, rpc::Response)]
 pub struct GetUserResponse {
     pub id: String,
     pub name: String,
@@ -67,7 +67,7 @@ pub struct GetUserResponse {
     pub last_login: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ArkType)]
+#[derive(Debug, Clone, Serialize, Deserialize, ArkType, rpc::Response)]
 pub struct CreateUserResponse {
     pub id: String,
     pub name: String,
@@ -77,19 +77,43 @@ pub struct CreateUserResponse {
     pub audit: Option<AuditStamp>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ArkType)]
+#[derive(Debug, Clone, Serialize, Deserialize, ArkType, rpc::Response)]
 pub struct PingResponse {
     pub success: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ArkType)]
+#[derive(Debug, Clone, Serialize, Deserialize, ArkType, rpc::Response)]
+#[rpc(code = 201)]
+pub struct CreatedResponse {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ArkType, rpc::Response)]
+pub enum AuthResponse {
+    Data { id: String },
+    #[rpc(code = 401)]
+    AuthRequired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ArkType, rpc::Response)]
+#[rpc(code = 202)]
+pub enum JobResponse {
+    Queued,
+    #[rpc(code = 409)]
+    Conflict { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ArkType, rpc::Response)]
 pub struct NestedResponse {
     pub user: GetUserResponse,
     pub created_at: String,
 }
 
 #[cfg(feature = "service")]
-pub async fn get_user(props: GetUserProps) -> Result<GetUserResponse, errx::Error> {
+pub async fn get_user(
+    _context: rpc::EmptyContext,
+    props: GetUserProps,
+) -> Result<GetUserResponse, errx::Error> {
     let role = props.expected_role.unwrap_or(UserRole::Member);
     let email = if props.include_email.unwrap_or(true) {
         "test@example.com".to_string()
@@ -107,7 +131,10 @@ pub async fn get_user(props: GetUserProps) -> Result<GetUserResponse, errx::Erro
 }
 
 #[cfg(feature = "service")]
-pub async fn create_user(props: CreateUserProps) -> Result<CreateUserResponse, errx::Error> {
+pub async fn create_user(
+    _context: rpc::EmptyContext,
+    props: CreateUserProps,
+) -> Result<CreateUserResponse, errx::Error> {
     let status = props.status.or(Some(AccountStatus::Active));
     Ok(CreateUserResponse {
         id: "new-user-123".to_string(),
@@ -120,13 +147,16 @@ pub async fn create_user(props: CreateUserProps) -> Result<CreateUserResponse, e
 }
 
 #[cfg(feature = "service")]
-pub async fn ping(_props: EmptyProps) -> Result<PingResponse, errx::Error> {
+pub async fn ping(
+    _context: rpc::EmptyContext,
+    _props: EmptyProps,
+) -> Result<PingResponse, errx::Error> {
     Ok(PingResponse { success: true })
 }
 
-rpc::impl_rpc!(v1, GetUserProps, GetUserResponse, get_user);
-rpc::impl_rpc!(v1, CreateUserProps, CreateUserResponse, create_user);
-rpc::impl_rpc!(v1, EmptyProps, PingResponse, ping);
+rpc::impl_rpc!(v1, GetUserProps, GetUserResponse, rpc::EmptyContext, get_user);
+rpc::impl_rpc!(v1, CreateUserProps, CreateUserResponse, rpc::EmptyContext, create_user);
+rpc::impl_rpc!(v1, EmptyProps, PingResponse, rpc::EmptyContext, ping);
 
 #[cfg(test)]
 mod tests {
@@ -196,6 +226,37 @@ mod tests {
         assert_props_type::<GetUserResponse>();
         assert_props_type::<CreateUserResponse>();
         assert_props_type::<PingResponse>();
+    }
+
+    #[test]
+    fn response_code_defaults_to_200() {
+        let res = PingResponse { success: true };
+        assert_eq!(rpc::Response::code(&res), 200);
+
+        let enum_res = AuthResponse::Data { id: "x".to_string() };
+        assert_eq!(rpc::Response::code(&enum_res), 200);
+    }
+
+    #[test]
+    fn response_code_struct_override() {
+        let res = CreatedResponse { id: "new".to_string() };
+        assert_eq!(rpc::Response::code(&res), 201);
+    }
+
+    #[test]
+    fn response_code_enum_variant_override() {
+        let res = AuthResponse::AuthRequired;
+        assert_eq!(rpc::Response::code(&res), 401);
+    }
+
+    #[test]
+    fn response_code_enum_default_and_override() {
+        let queued = JobResponse::Queued;
+        let conflict = JobResponse::Conflict {
+            message: "busy".to_string(),
+        };
+        assert_eq!(rpc::Response::code(&queued), 202);
+        assert_eq!(rpc::Response::code(&conflict), 409);
     }
 
     #[cfg(feature = "bindings")]

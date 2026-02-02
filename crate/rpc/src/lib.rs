@@ -12,6 +12,7 @@ use arktype_ast::Schema;
 pub use arktype_ast::ArkType;
 pub use inventory::submit;
 pub use rpc_attr::handler;
+pub use rpc_attr::Response;
 
 pub mod server;
 
@@ -73,11 +74,18 @@ macro_rules! register_server_rpc {
             use errx::ErrorCapture as _;
 
             async fn __rpc_handler(
+                $crate::ContextWrapper(context): $crate::ContextWrapper<
+                    <$target as $crate::Rpc>::Context,
+                >,
                 Json(payload): Json<<$target as $crate::Rpc>::Props>
             ) -> Result<Response, errx::Error> {
-                let res: Result<$target, errx::Error> = $exec_fn(payload).await;
-                res.map(|o| (StatusCode::OK, axum::Json(o)).into_response())
-                    .trace_err()
+                let res: Result<$target, errx::Error> = $exec_fn(context, payload).await;
+                res.map(|o| {
+                    let status = StatusCode::from_u16($crate::Response::code(&o))
+                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                    (status, axum::Json(o)).into_response()
+                })
+                .trace_err()
             }
 
             fn __route() -> MethodRouter {
@@ -154,15 +162,61 @@ pub fn generate_bindings<'a>(
 pub trait Rpc {
     const NAME: &'static str;
     type Props: Serialize + DeserializeOwned;
+    type Context: Context;
+}
+
+pub trait Context: Sized + Send + Sync + 'static {
+    type Future<'a>: std::future::Future<Output = Result<Self, errx::Error>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn from_request_parts<'a>(
+        parts: &'a mut axum::http::request::Parts,
+    ) -> Self::Future<'a>;
+}
+
+pub struct EmptyContext;
+
+impl Context for EmptyContext {
+    type Future<'a> = std::future::Ready<Result<Self, errx::Error>>;
+
+    fn from_request_parts<'a>(
+        _parts: &'a mut axum::http::request::Parts,
+    ) -> Self::Future<'a> {
+        std::future::ready(Ok(Self))
+    }
+}
+
+#[doc(hidden)]
+pub struct ContextWrapper<T>(pub T);
+
+impl<S, T> axum::extract::FromRequestParts<S> for ContextWrapper<T>
+where
+    T: Context,
+    S: Send + Sync,
+{
+    type Rejection = errx::Error;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        T::from_request_parts(parts).await.map(ContextWrapper)
+    }
+}
+
+pub trait Response {
+    fn code(&self) -> u16;
 }
 
 #[macro_export]
 macro_rules! impl_rpc {
-    ($group:ident, $props:ty, $target:ident, $exec_fn:path) => {
+    ($group:ident, $props:ty, $target:ident, $context:ty, $exec_fn:path) => {
         impl $crate::Rpc for $target {
             const NAME: &'static str =
                 concat!("/rpc/", stringify!($group), "/", stringify!($exec_fn));
             type Props = $props;
+            type Context = $context;
         }
 
         #[cfg(feature = "bindings")]
