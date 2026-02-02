@@ -2,8 +2,8 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::{
-    parse_macro_input, AngleBracketedGenericArguments, GenericArgument, ItemFn, Path,
-    PathArguments, ReturnType, Type, TypePath,
+    parse_macro_input, AngleBracketedGenericArguments, Attribute, Data, DeriveInput, Fields,
+    GenericArgument, ItemFn, Path, PathArguments, ReturnType, Type, TypePath,
 };
 
 #[proc_macro_attribute]
@@ -34,17 +34,29 @@ pub fn handler(
             .into();
     }
 
-    // Exactly one parameter: props
-    if func.sig.inputs.len() != 1 {
+    // Exactly two parameters: context, props
+    if func.sig.inputs.len() != 2 {
         return syn::Error::new_spanned(
             &func.sig.inputs,
-            "rpc handlers must take exactly one parameter: the props type",
+            "rpc handlers must take exactly two parameters: context then props",
         )
         .to_compile_error()
         .into();
     }
 
-    let props_ty: Type = match func.sig.inputs.first().unwrap() {
+    let ctx_ty: Type = match func.sig.inputs.first().unwrap() {
+        syn::FnArg::Typed(pat_ty) => (*pat_ty.ty).clone(),
+        syn::FnArg::Receiver(_) => {
+            return syn::Error::new_spanned(
+                &func.sig.inputs,
+                "rpc handlers must be free functions (no self/receiver)",
+            )
+            .to_compile_error()
+            .into();
+        },
+    };
+
+    let props_ty: Type = match func.sig.inputs.iter().nth(1).unwrap() {
         syn::FnArg::Typed(pat_ty) => (*pat_ty.ty).clone(),
         syn::FnArg::Receiver(_) => {
             return syn::Error::new_spanned(
@@ -68,7 +80,7 @@ pub fn handler(
     let expanded = quote! {
         #func
 
-        ::rpc::impl_rpc!(#version, #props_ty, #ok_ty, #fn_ident);
+        ::rpc::impl_rpc!(#version, #props_ty, #ok_ty, #ctx_ty, #fn_ident);
     };
 
     expanded.into()
@@ -165,4 +177,83 @@ fn is_errx_error_type(ty: &Type) -> bool {
     let last = segs.last().unwrap().ident.to_string();
     let prev = segs.iter().nth(segs.len() - 2).unwrap().ident.to_string();
     prev == "errx" && last == "Error"
+}
+
+#[proc_macro_derive(Response, attributes(rpc))]
+pub fn derive_response(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as DeriveInput);
+    let name = input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let default_code = match parse_rpc_code(&input.attrs) {
+        Ok(code) => code.unwrap_or(200),
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    let body = match input.data {
+        Data::Struct(_) => {
+            quote! { #default_code }
+        },
+        Data::Enum(data) => {
+            let mut arms = Vec::with_capacity(data.variants.len());
+            for variant in data.variants.iter() {
+                let variant_code = match parse_rpc_code(&variant.attrs) {
+                    Ok(code) => code.unwrap_or(default_code),
+                    Err(err) => return err.to_compile_error().into(),
+                };
+                let ident = &variant.ident;
+                let pat = match &variant.fields {
+                    Fields::Named(_) => quote! { Self::#ident { .. } },
+                    Fields::Unnamed(_) => quote! { Self::#ident ( .. ) },
+                    Fields::Unit => quote! { Self::#ident },
+                };
+                arms.push(quote! { #pat => #variant_code });
+            }
+
+            quote! {
+                match self {
+                    #(#arms),*
+                }
+            }
+        },
+        Data::Union(_) => {
+            return syn::Error::new_spanned(name, "Response derive is not supported for unions")
+                .to_compile_error()
+                .into();
+        },
+    };
+
+    let expanded = quote! {
+        impl #impl_generics ::rpc::Response for #name #ty_generics #where_clause {
+            fn code(&self) -> u16 {
+                #body
+            }
+        }
+    };
+
+    expanded.into()
+}
+
+fn parse_rpc_code(attrs: &[Attribute]) -> syn::Result<Option<u16>> {
+    let mut code = None;
+    for attr in attrs.iter().filter(|attr| attr.path().is_ident("rpc")) {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("code") {
+                if code.is_some() {
+                    return Err(meta.error("duplicate rpc code"));
+                }
+                let value = meta.value()?;
+                let lit: syn::LitInt = value.parse()?;
+                let parsed = lit.base10_parse::<u16>()?;
+                if !(100..=599).contains(&parsed) {
+                    return Err(meta.error("rpc code must be in 100..=599"));
+                }
+                code = Some(parsed);
+                Ok(())
+            } else {
+                Err(meta.error("unsupported rpc attribute"))
+            }
+        })?;
+    }
+    Ok(code)
 }
