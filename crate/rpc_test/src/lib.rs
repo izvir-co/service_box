@@ -31,6 +31,11 @@ pub struct CreateUserProps {
 pub struct EmptyProps {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, ArkType)]
+pub struct HookedProps {
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ArkType)]
 pub enum UserRole {
     Admin,
     Member,
@@ -83,6 +88,11 @@ pub struct PingResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ArkType, rpc::Response)]
+pub struct HookedResponse {
+    pub ok: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ArkType, rpc::Response)]
 #[rpc(code = 201)]
 pub struct CreatedResponse {
     pub id: String,
@@ -111,7 +121,7 @@ pub struct NestedResponse {
 
 #[cfg(feature = "service")]
 pub async fn get_user(
-    _context: rpc::EmptyContext,
+    _context: &rpc::EmptyContext,
     props: GetUserProps,
 ) -> Result<GetUserResponse, errx::Error> {
     let role = props.expected_role.unwrap_or(UserRole::Member);
@@ -132,7 +142,7 @@ pub async fn get_user(
 
 #[cfg(feature = "service")]
 pub async fn create_user(
-    _context: rpc::EmptyContext,
+    _context: &rpc::EmptyContext,
     props: CreateUserProps,
 ) -> Result<CreateUserResponse, errx::Error> {
     let status = props.status.or(Some(AccountStatus::Active));
@@ -148,15 +158,32 @@ pub async fn create_user(
 
 #[cfg(feature = "service")]
 pub async fn ping(
-    _context: rpc::EmptyContext,
+    _context: &rpc::EmptyContext,
     _props: EmptyProps,
 ) -> Result<PingResponse, errx::Error> {
     Ok(PingResponse { success: true })
 }
 
+#[cfg(feature = "service")]
+pub async fn hooked(
+    context: &mut rpc::EmptyContext,
+    props: HookedProps,
+) -> Result<HookedResponse, errx::Error> {
+    use rpc::Context;
+
+    let header_value = format!("id={}", props.request_id);
+    context.on_success(move |response| {
+        response
+            .headers_mut()
+            .insert("x-hooked", header_value.parse().unwrap());
+    });
+    Ok(HookedResponse { ok: true })
+}
+
 rpc::impl_rpc!(v1, GetUserProps, GetUserResponse, rpc::EmptyContext, get_user);
 rpc::impl_rpc!(v1, CreateUserProps, CreateUserResponse, rpc::EmptyContext, create_user);
 rpc::impl_rpc!(v1, EmptyProps, PingResponse, rpc::EmptyContext, ping);
+rpc::impl_rpc!(v1, HookedProps, HookedResponse, rpc::EmptyContext, hooked);
 
 #[cfg(test)]
 mod tests {
@@ -367,6 +394,10 @@ mod tests {
 
     #[cfg(feature = "service")]
     mod service_tests {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt as _;
+
         #[test]
         fn router_is_created() {
             // The router() function should return a valid axum Router
@@ -411,6 +442,26 @@ mod tests {
                     endpoint.path
                 );
             }
+        }
+
+        #[tokio::test]
+        async fn hooked_handler_sets_response_header() {
+            let router = rpc::router();
+            let request = Request::builder()
+                .method("POST")
+                .uri("/rpc/v1/hooked")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"request_id":"abc"}"#))
+                .unwrap();
+
+            let response = router.oneshot(request).await.unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let header = response
+                .headers()
+                .get("x-hooked")
+                .and_then(|value| value.to_str().ok());
+            assert_eq!(header, Some("id=abc"));
         }
     }
 }

@@ -13,6 +13,12 @@ export type AuditStamp = typeof AuditStamp.infer
 export const EmptyProps = type({  })
 export type EmptyProps = typeof EmptyProps.infer
 
+export const HookedProps = type({ requestId: type.string })
+export type HookedProps = typeof HookedProps.infer
+
+export const HookedResponse = type({ ok: type.boolean })
+export type HookedResponse = typeof HookedResponse.infer
+
 export const PingResponse = type({ success: type.boolean })
 export type PingResponse = typeof PingResponse.infer
 
@@ -35,6 +41,7 @@ export const ServiceDefinitions = {
   v1: {
     createUser: route({ endpoint: "v1/create_user", input: CreateUserProps, output: CreateUserResponse }),
     getUser: route({ endpoint: "v1/get_user", input: GetUserProps, output: GetUserResponse }),
+    hooked: route({ endpoint: "v1/hooked", input: HookedProps, output: HookedResponse }),
     ping: route({ endpoint: "v1/ping", input: EmptyProps, output: PingResponse }),
   },
 } as const;

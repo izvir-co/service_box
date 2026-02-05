@@ -34,11 +34,11 @@ pub fn handler(
             .into();
     }
 
-    // Exactly two parameters: context, props
+    // Exactly two parameters: &context or &mut context, props
     if func.sig.inputs.len() != 2 {
         return syn::Error::new_spanned(
             &func.sig.inputs,
-            "rpc handlers must take exactly two parameters: context then props",
+            "rpc handlers must take exactly two parameters: &context or &mut context then props",
         )
         .to_compile_error()
         .into();
@@ -50,6 +50,18 @@ pub fn handler(
             return syn::Error::new_spanned(
                 &func.sig.inputs,
                 "rpc handlers must be free functions (no self/receiver)",
+            )
+            .to_compile_error()
+            .into();
+        },
+    };
+
+    let ctx_ty = match ctx_ty {
+        Type::Reference(reference) => (*reference.elem).clone(),
+        other => {
+            return syn::Error::new_spanned(
+                other,
+                "rpc handlers must take &Context or &mut Context as the first parameter",
             )
             .to_compile_error()
             .into();

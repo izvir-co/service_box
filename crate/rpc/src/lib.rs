@@ -79,11 +79,14 @@ macro_rules! register_server_rpc {
                 >,
                 Json(payload): Json<<$target as $crate::Rpc>::Props>
             ) -> Result<Response, errx::Error> {
-                let res: Result<$target, errx::Error> = $exec_fn(context, payload).await;
+                let mut context = context;
+                let res: Result<$target, errx::Error> = $exec_fn(&mut context, payload).await;
                 res.map(|o| {
                     let status = StatusCode::from_u16($crate::Response::code(&o))
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                    (status, axum::Json(o)).into_response()
+                    let mut response = (status, axum::Json(o)).into_response();
+                    $crate::Context::response_hooks(&mut context).apply(&mut response);
+                    response
                 })
                 .trace_err()
             }
@@ -173,9 +176,24 @@ pub trait Context: Sized + Send + Sync + 'static {
     fn from_request_parts<'a>(
         parts: &'a mut axum::http::request::Parts,
     ) -> Self::Future<'a>;
+
+    fn response_hooks(&mut self) -> &mut ResponseHooks;
+
+    fn on_success<F>(
+        &mut self,
+        hook: F,
+    )
+    where
+        F: FnOnce(&mut axum::response::Response) + Send + Sync + 'static,
+    {
+        self.response_hooks().push(hook);
+    }
 }
 
-pub struct EmptyContext;
+#[derive(Default)]
+pub struct EmptyContext {
+    hooks: ResponseHooks,
+}
 
 impl Context for EmptyContext {
     type Future<'a> = std::future::Ready<Result<Self, errx::Error>>;
@@ -183,7 +201,11 @@ impl Context for EmptyContext {
     fn from_request_parts<'a>(
         _parts: &'a mut axum::http::request::Parts,
     ) -> Self::Future<'a> {
-        std::future::ready(Ok(Self))
+        std::future::ready(Ok(Self::default()))
+    }
+
+    fn response_hooks(&mut self) -> &mut ResponseHooks {
+        &mut self.hooks
     }
 }
 
@@ -207,6 +229,33 @@ where
 
 pub trait Response {
     fn code(&self) -> u16;
+}
+
+#[derive(Default)]
+pub struct ResponseHooks {
+    hooks: Vec<Box<dyn FnOnce(&mut axum::response::Response) + Send + Sync>>,
+}
+
+impl ResponseHooks {
+    pub fn push<F>(
+        &mut self,
+        hook: F,
+    )
+    where
+        F: FnOnce(&mut axum::response::Response) + Send + Sync + 'static,
+    {
+        self.hooks.push(Box::new(hook));
+    }
+
+    pub fn apply(
+        &mut self,
+        response: &mut axum::response::Response,
+    ) {
+        let hooks = std::mem::take(&mut self.hooks);
+        for hook in hooks {
+            hook(response);
+        }
+    }
 }
 
 #[macro_export]
