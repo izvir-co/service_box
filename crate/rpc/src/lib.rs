@@ -63,7 +63,6 @@ impl<'a> BindgenFilter<'a> {
 #[macro_export]
 macro_rules! register_server_rpc {
     ($target:ident, $exec_fn:path) => {
-        #[cfg(feature = "service")]
         const _: () = {
             use axum::{
                 extract::Json,
@@ -132,7 +131,6 @@ pub fn generate_bindings<'a>(
         if !filter.matches(crate_id) {
             continue;
         }
-        tracing::info!("bindgen running for {crate_id}...");
         let gen_start = Instant::now();
         let instance = instances.entry(crate_id.to_string()).or_insert(RpcCalls {
             imports: BTreeMap::new(),
@@ -140,7 +138,6 @@ pub fn generate_bindings<'a>(
         });
         (b.generator)(instance);
         let gen_end = Instant::now() - gen_start;
-        tracing::info!("Done in {gen_end:?}");
     }
 
     let abs_out_dir = out_dir
@@ -268,7 +265,6 @@ macro_rules! impl_rpc {
             type Context = $context;
         }
 
-        #[cfg(feature = "bindings")]
         const _: () = {
             #[allow(non_snake_case)]
             fn $target(instance: &mut $crate::RpcCalls) {

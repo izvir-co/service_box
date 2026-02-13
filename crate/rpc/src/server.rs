@@ -41,7 +41,6 @@ impl MakeRequestId for MakeRequestTraceId {
         _request: &Request<B>,
     ) -> Option<RequestId> {
         let request_id = Uuid::now_v7().simple().to_string().parse().unwrap();
-        tracing::info!("created req id {request_id:?}");
         Some(RequestId::new(request_id))
     }
 }
